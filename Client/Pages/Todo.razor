@@ -1,0 +1,121 @@
+@page "/main"
+@using todo.Shared
+@using System.Net.Http.Headers
+@inject HttpClient HttpClient
+@inject NavigationManager NavigationManager
+@inject IJSRuntime jsr
+
+<PageTitle>todos</PageTitle>
+<div class="todo">
+    <h3>Todo (@todos.Count(todo => !todo.IsDone))</h3>
+    <ul>
+        @foreach (var todo in todos)
+        {
+            <li>
+                <div class="form-inline mb-2">
+                    <input class="form-check-input" type="checkbox" @bind="todo.IsDone" />
+                    <input type="text" class="form-control mb-2" @bind="todo.Title" />
+                    <button class="btn btn-secondary" @onclick="(()=>UpdateTodo(todo))"> update </button>
+                    <button class="btn btn-danger" @onclick="(()=>DeleteTodo(todo))"> delete </button>
+                    @if (todo.FileName != null)
+                    {
+                        <a href="/Data/@todo.FileName"> see file </a>
+                    }
+                </div>
+                @if (showSendDialog)
+                {
+                    <ShareTodo todo="todo" />
+                }
+            </li>
+        }
+    </ul>
+    <button class="btn btn-success m-2" @onclick="(()=>showSendDialog=!showSendDialog)"> show send dialog </button>
+    <h3>Add a new todo</h3>
+    <form Model="@newTodo" onsubmit="@AddTodo">
+        <InputFile class="form-control" OnChange="@HandleFile" />
+        <input class="form-control m-2" placeholder="something todo" @bind="newTodoTitle" />
+        <button type="submit" class="btn-lg btn-primary m-2">add todo</button>
+    </form>
+</div>
+@code {
+    private List<TodoItem> todos = new();
+    private string? newTodoTitle;
+    private string? userdata;
+    private bool showSendDialog = false;
+    private IBrowserFile? file;
+    private TodoItem newTodo = new();
+
+    private async Task<string> GetJWT()
+    {
+        userdata = await jsr.InvokeAsync<string>("localStorage.getItem", "user").ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(userdata))
+        {
+            var dataArray = userdata.Split(';', 2);
+            if (dataArray.Length == 2)
+                return dataArray[1];
+        }
+        return null;
+    }
+
+    private async Task<HttpResponseMessage> ApiRequest(HttpMethod method, string endpoint, HttpContent content = null)
+    {
+        var requestMsg = new HttpRequestMessage(method, endpoint);
+        requestMsg.Headers.Add("Authorization", "Bearer " + await GetJWT());
+        requestMsg.Content = content;
+        var response = await HttpClient.SendAsync(requestMsg);
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            await jsr.InvokeVoidAsync("localStorage.removeItem", "user").ConfigureAwait(false);
+            userdata = null;
+        }
+        return response;
+    }
+    protected override async Task OnInitializedAsync()
+    {
+        var response = await ApiRequest(HttpMethod.Get, "todos");
+        todos = await response.Content.ReadFromJsonAsync<List<TodoItem>>();
+    }
+    private async Task UpdateTodo(TodoItem todo)
+    {
+        await ApiRequest(HttpMethod.Put, $"todos/{todo.Id}", JsonContent.Create<TodoItem>(todo));
+    }
+    private async Task DeleteTodo(TodoItem todo)
+    {
+        await ApiRequest(HttpMethod.Delete, $"todos/{todo.Id}");
+        todos.Remove(todos.Single(td => td.Id == todo.Id));
+    }
+    private async Task AddTodo()
+    {
+        if (!string.IsNullOrWhiteSpace(newTodoTitle))
+        {
+            string fileName = null;
+            if (file != null)
+            {
+                fileName = await UploadFile();
+            }
+            newTodo = new TodoItem
+                {
+                    Title = newTodoTitle,
+                    Id = new Random().Next(0, int.MaxValue),
+                    Owner = userdata.Split(';', 2)[0],
+                    FileName = fileName
+                };
+            await ApiRequest(HttpMethod.Post, "todos", JsonContent.Create<TodoItem>(newTodo));
+            todos.Add(newTodo);
+            newTodoTitle = string.Empty;
+        }
+    }
+    private async Task<string> UploadFile()
+    {
+        var content = new MultipartFormDataContent();
+        var fileContent = new StreamContent(file.OpenReadStream());
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue(file.ContentType);
+        content.Add(content: fileContent, name: "\"file\"", fileName: file.Name);
+        var response = await ApiRequest(HttpMethod.Post, "todos/upload", content);
+        return await response.Content.ReadAsStringAsync();
+    }
+    private async Task HandleFile(InputFileChangeEventArgs e)
+    {
+        file = e.File;
+    }
+}

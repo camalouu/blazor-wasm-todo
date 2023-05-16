@@ -1,0 +1,31 @@
+@using todo.Shared
+@inject HttpClient HttpClient
+@inject IJSRuntime jsr
+
+<div>
+    <form Model="@sharedTodo" onsubmit="@HandleSubmit">
+        <input placeholder="enter receiver's email" @bind-value="sharedTodo.Receiver" />
+
+        <button class="btn btn-info" type="submit">share todo</button>
+    </form>
+</div>
+
+@code {
+    [Parameter]
+    public TodoItem todo { get; set; }
+    public TodoItemShare sharedTodo = new();
+    private async Task HandleSubmit()
+    {
+        sharedTodo.Id = new Random().Next(0, int.MaxValue);
+        sharedTodo.Title = todo.Title;
+        sharedTodo.IsDone = todo.IsDone;
+        sharedTodo.Owner = todo.Owner;
+        sharedTodo.FileName = todo.FileName;
+        string token = (await jsr.InvokeAsync<string>("localStorage.getItem", "user").ConfigureAwait(false)).Split(";")[1];
+        var requestMsg = new HttpRequestMessage(HttpMethod.Post, "todos/share");
+        requestMsg.Headers.Add("Authorization", "Bearer " + token);
+        requestMsg.Content = JsonContent.Create<TodoItemShare>(sharedTodo);
+        var response = await HttpClient.SendAsync(requestMsg);
+    }
+
+}
